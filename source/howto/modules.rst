@@ -1,321 +1,1589 @@
-.. include:: ../include/replace.rst
 
-#############################
-Working With Language Modules
-#############################
-
-Languages supported by Unit fall into these two categories:
-
-- :ref:`External <modules-ext>` (Go, Node.js): Run outside Unit with an
-  interface layer to the native runtime.
-
-- :ref:`Embedded <modules-emb>` (Java, Perl, PHP, Python, Ruby, WebAssembly):
-  Execute in runtimes that Unit loads at startup.
-
-For any specific language and its version, Unit needs a language module.
-
-.. _modules-ext:
-
-*************************
-External Language Modules
-*************************
-
-External modules are regular language libraries or packages that you install
-like any other.  They provide common web functionality, communicating with Unit
-from the app's runspace.
-
-In Go, Unit support is implemented with a package that you :ref:`import
-<configuration-go>` in your apps to make them Unit-aware.
-
-In Node.js, Unit is supported by an :program:`npm`-hosted `package
-<https://www.npmjs.com/package/unit-http>`__ that you :ref:`require
-<configuration-nodejs>` in your app code.  You can :ref:`install
-<installation-nodejs-package>` the package from the :program:`npm` repository;
-otherwise, :ref:`build <howto/source-modules-nodejs>` it for your version of
-Node.js using Unit's sources.
-
-For WebAssembly, Unit delegates bytecode execution to the
-`Wasmtime <https://wasmtime.dev/>`_
-runtime that is installed with the
-:ref:`language module <installation-precomp-pkgs>`
-module or during
-a :ref:`source build <source-wasm>`.
-
-.. _modules-emb:
-
-*************************
-Embedded Language Modules
-*************************
-
-Embedded modules are shared libraries that Unit loads at startup.  Query Unit
-to find them in your system:
-
-.. subs-code-block:: console
-
-   $ unitd -h
-
-          ...
-         --log FILE           set log filename
-                              default: ":nxt_ph:`/default/path/to/unit.log <This is the default log path which can be overridden at runtime>`"
-
-         --modules DIRECTORY  set modules directory name
-                              default: ":nxt_ph:`/default/modules/path/ <This is the default modules path which can be overridden at runtime>`"
-
-   $ :nxt_hint:`ps ax | grep unitd <Check whether the defaults were overridden at launch>`
-         ...
-         unit: main v|version| [unitd --log :nxt_ph:`/runtime/path/to/unit.log <If this option is set, its value is used at runtime>` --modules :nxt_ph:`/runtime/modules/path/ <If this option is set, its value is used at runtime>` ... ]
-
-   $ ls :nxt_ph:`/path/to/modules <Use runtime value if the default was overridden>`
-
-         java.unit.so  php.unit.so     ruby.unit.so  wasm_wasi_component.unit.so
-         perl.unit.so  python.unit.so  wasm.unit.so
-
-To clarify the module versions, check the :ref:`Unit log <troubleshooting-log>`
-to see which modules were loaded at startup:
-
-.. subs-code-block:: console
-
-   # less :nxt_ph:`/path/to/unit.log <Path to log can be determined in the same manner as above>`
-         ...
-         discovery started
-         module: <language> <version> "/path/to/modules/<module name>.unit.so"
-         ...
-
-If a language version is not listed, Unit can't run apps that rely on it;
-however, you can add new modules:
-
-- If possible, use the official :ref:`language packages
-  <installation-precomp-pkgs>` for easy integration and maintenance.
-
-- If you installed Unit via a :ref:`third-party repo
-  <installation-community-repos>`, check whether a suitable language package is
-  available there.
-
-- If you want a customized yet reusable solution, :ref:`prepare <modules-pkg>`
-  your own package to be installed beside Unit.
-
-.. _modules-pkg:
-
-========================
-Packaging Custom Modules
-========================
-
-There's always a chance that you need to run a language version that isn't yet
-available among the official Unit :ref:`packages <installation-precomp-pkgs>`
-but still want to benefit from the convenience of a packaged installation.  In
-this case, you can build your own package to be installed alongside the
-official distribution, adding the latter as a prerequisite.
-
-Here, we are packaging a custom PHP |_| 7.3 :ref:`module
-<howto/source-modules-php>` to be installed next to the official Unit package;
-adjust the command samples as needed to fit your scenario.
-
-.. note::
-
-   For details of building Unit language modules, see the source code
-   :ref:`howto <source-modules>`; it also describes building
-   :doc:`Unit <source>` itself.  For more packaging examples, see our package
-   `sources <https://hg.nginx.org/unit/file/tip/pkg/>`_.
-
-..
-   Legacy anchors to preserve existing external links.
-.. _modules-deb:
-.. _modules-rpm:
-
-.. tabs::
-   :prefix: packages
-   :toc:
-
-   .. tab:: .deb
-
-      Assuming you are packaging for the current system and have the official
-      Unit package installed:
-
-      #. Make sure to install the :ref:`prerequisites
-         <source-prereq-build>` for the package.  In our example,
-         it's PHP |_| 7.3 on Debian |_| 10:
-
-         .. code-block:: console
-
-            # apt update
-            # apt install :nxt_hint:`ca-certificates apt-transport-https debian-archive-keyring <Needed to install the php7.3 package from the PHP repo>`
-            # curl --output /usr/share/keyrings/php-keyring.gpg  \
-                  :nxt_hint:`https://packages.sury.org/php/apt.gpg <Adding the repo key to make it usable>`
-            # echo "deb [signed-by=/usr/share/keyrings/php-keyring.gpg]  \
-                  https://packages.sury.org/php/ buster main" > /etc/apt/sources.list.d/php.list
-            # apt update
-            # apt install php7.3
-            # apt install :nxt_hint:`php-dev libphp-embed <Needed to build the module and the package>`
-
-      #. Create a staging directory for your package:
-
-         .. subs-code-block:: console
-
-            $ export UNITTMP=$(mktemp -d -p /tmp -t unit.XXXXXX)
-            $ mkdir -p $UNITTMP/unit-php7.3/DEBIAN
-            $ cd $UNITTMP
-
-         This creates a folder structure fit for :program:`dpkg-deb`; the
-         **DEBIAN** folder will store the package definition.
-
-      #. Run :program:`unitd --version` and note the :program:`./configure`
-         :ref:`flags <source-config-src>` for later use, omitting
-         :option:`!--ld-opt` and :option:`!--njs`:
-
-         .. subs-code-block:: console
-
-            $ unitd --version
-
-                unit version: |version|
-                configured as ./configure :nxt_ph:`FLAGS <Note the flags, omitting --ld-opt and --njs>`
-
-      #. Download Unit's sources, :ref:`configure <source-modules>`
-         and build your custom module, then put it where Unit will find it:
-
-         .. subs-code-block:: console
-
-            $ curl -O https://sources.nginx.org/unit/unit-|version|.tar.gz
-            $ tar xzf unit-|version|.tar.gz                                 # Puts Unit's sources in the unit-|version| subdirectory
-            $ cd unit-|version|
-            $ ./configure :nxt_ph:`FLAGS W/O --LD-OPT & --NJS <The ./configure flags, except for --ld-opt and --njs>`                     # Use the ./configure flags noted in the previous step
-            $ ./configure php --module=php7.3 --config=php-config        # Configures the module itself
-            $ make php7.3                                                # Builds the module in the build/ subdirectory
-            $ mkdir -p $UNITTMP/unit-php7.3/:nxt_ph:`MODULESPATH <Path to Unit's language modules>`                  # Use the module path set by ./configure or by default
-            $ mv build/php7.3.unit.so $UNITTMP/unit-php7.3/:nxt_ph:`MODULESPATH <Path to Unit's language modules>`   # Adds the module to the package
-
-      #. Create a **$UNITTMP/unit-php7.3/DEBIAN/control** `file
-         <https://www.debian.org/doc/debian-policy/ch-controlfields.html>`__,
-         listing **unit** with other dependencies:
-
-         .. subs-code-block:: control
-
-            Package: unit-php7.3
-            Version: |version|
-            Comment0: Use Unit's package version for consistency: 'apt show unit | grep Version'
-            Architecture: amd64
-            Comment1: To get current architecture, run 'dpkg --print-architecture'
-            Comment2: For a list of other options, run 'dpkg-architecture -L'
-            Depends: unit (= |version|-1~buster), php7.3, libphp-embed
-            Comment3: Specify Unit's package version to avoid issues when Unit updates
-            Comment4: Again, run 'apt show unit | grep Version' to get this value
-            Maintainer: Jane Doe <j.doe@example.com>
-            Description: Custom PHP 7.3 language module for NGINX Unit |version|
-
-         Save and close the file.
-
-      #. Build and install the package:
-
-         .. subs-code-block:: console
-
-            $ dpkg-deb -b $UNITTMP/unit-php7.3
-            # dpkg -i $UNITTMP/unit-php7.3.deb
-
-
-   .. tab:: .rpm
-
-      Assuming you are packaging for the current system and have the official
-      Unit package installed:
-
-      #. Make sure to install the :ref:`prerequisites
-         <source-prereq-build>` for the package.  In our example,
-         it's PHP |_| 7.3 on Fedora |_| 30:
-
-         .. code-block:: console
-
-            # yum install -y php-7.3.8
-            # yum install php-devel php-embedded
-
-      #. Install RPM development tools and prepare the directory structure:
-
-         .. code-block:: console
-
-            # yum install -y rpmdevtools
-            $ rpmdev-setuptree
-
-      #. Create a **.spec** `file
-         <https://rpm-packaging-guide.github.io/#what-is-a-spec-file>`__
-         to store build commands for your custom package:
-
-         .. code-block:: console
-
-            $ cd ~/rpmbuild/SPECS
-            $ rpmdev-newspec unit-php7.3
-
-      #. Run :program:`unitd --version` and note the :program:`./configure`
-         :ref:`flags <source-config-src>` for later use, omitting
-         :option:`!--ld-opt` and :option:`!--njs`:
-
-         .. subs-code-block:: console
-
-            $ unitd --version
-
-                unit version: |version|
-                configured as ./configure :nxt_ph:`FLAGS <Note the flags, omitting --ld-opt and --njs>`
-
-      #. Edit the **unit-php7.3.spec** file, adding the commands that
-         download Unit's sources, :ref:`configure
-         <source-modules>` and build your custom module, then
-         put it where Unit will find it:
-
-         .. subs-code-block:: spec
-
-            Name:           unit-php7.3
-            Version:        |version|
-            # Use Unit's package version for consistency: 'yum info unit | grep Version'
-            Release:        1%{?dist}
-            Summary:        Custom language module for NGINX Unit
-
-            License:        ASL 2.0
-            # Unit uses ASL 2.0; your license depends on the language you are packaging
-            URL:            https://example.com
-            BuildRequires:  gcc
-            BuildRequires:  make
-            BuildRequires:  php-devel
-            BuildRequires:  php-embedded
-            Requires:       unit = |version|
-            # Specify Unit's package version to avoid issues when Unit updates
-            # Again, run 'yum info unit | grep Version' to get this value
-            Requires:       php >= 7.3
-            Requires:       php-embedded
-
-            %description
-            Custom language module for NGINX Unit |version| (https://unit.nginx.org).
-
-            Maintainer: Jane Doe <j.doe@example.com>
-
-            %prep
-            curl -O https://sources.nginx.org/unit/unit-|version|.tar.gz
-            # Downloads Unit's sources
-            tar --strip-components=1 -xzf unit-|version|.tar.gz
-            # Extracts them locally for compilation steps in the %build section
-
-            %build
-            ./configure :nxt_ph:`FLAGS W/O --LD-OPT & --NJS <The ./configure flags, except for --ld-opt and --njs>`
-            # Configures the build; use the ./configure flags noted in the previous step
-            ./configure php --module=php7.3 --config=php-config
-            # Configures the module itself
-            make php7.3
-            # Builds the module
-
-            %install
-            DESTDIR=%{buildroot} make php7.3-install
-            # Adds the module to the package
-
-            %files
-            %attr(0755, root, root) ":nxt_ph:`MODULESPATH <Path to Unit's language modules>`/php7.3.unit.so"
-            # Lists the module as package contents to include it in the package build
-            # Use the module path set by ./configure or by default
-
-         Save and close the file.
-
-      #. Build and install the package:
-
-         .. code-block:: console
-
-            $ rpmbuild -bb unit-php7.3.spec
-
-                ...
-                Wrote: /home/user/rpmbuild/RPMS/<arch>/unit-php7.3-<moduleversion>.<arch>.rpm
-                ...
-
-            # yum install -y /home/user/rpmbuild/RPMS/<arch>/unit-php7.3-<moduleversion>.<arch>.rpm
+<!DOCTYPE html>
+<!--
+T: 2023-03-10 15:48:44
+Api: 94c8aea97297a94e4308
+It: 3467934
+
+-->
+<html><head>
+    <title>Link Locked</title>
+<meta name="description" content="Link Locked"/>
+<meta property="og:title" content="Link Locked"/>
+<meta property="og:description" content="Link Locked"/>
+<meta name="referrer" content="no-referrer">
+
+<!-- Analytics -->
+
+<script
+        src="https://browser.sentry-cdn.com/6.4.1/bundle.min.js"
+        integrity="sha384-THoc7rflwZFKTdZNgv6jLFFDn299Uv3t1SW5B4yGLvLiCRTYP9ys6vXZcMl95TQF"
+        crossorigin="anonymous"
+></script>
+<script>
+    Sentry.init({
+        dsn: 'https://e0e6a104cb354a09bf094a90e676ea13@o425163.ingest.sentry.io/5780930',
+        tracesSampleRate: 0.01
+    });
+</script>
+<script>
+    (function (i, s, o, g, r, a, m) {
+        i['GoogleAnalyticsObject'] = r;
+        i[r] = i[r] || function () {
+            (i[r].q = i[r].q || []).push(arguments)
+        }, i[r].l = 1 * new Date();
+        a = s.createElement(o), m = s.getElementsByTagName(o)[0];
+        a.async = 1;
+        a.src = g;
+        m.parentNode.insertBefore(a, m)
+    })(window, document, 'script', 'https://www.google-analytics.com/analytics.js', 'ga');
+
+
+    
+    ga('send', 'pageview');
+
+</script>
+
+
+    <style>
+        .header_blue {
+            background: #1565c0;
+            padding: 80px 0 20px;
+            color: #fff;
+            font-size: 48px;
+            font-weight: 300;
+            margin-bottom: 40px;
+        }
+        .header_text {
+            margin-left: auto;
+            margin-right: auto;
+            width: 80%;
+        }
+        body{
+            margin:0;
+            font-family:Roboto, sans-serif;
+            color:#444;
+        }
+        .unlockBtn:hover{
+            box-shadow: 0 3px 6px rgba(0,0,0,.16), 0 3px 6px rgba(0,0,0,.23);
+        }
+        .unlockBtn {
+            background: #2196f3;
+            border: none;
+            border-radius: 2px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.24);
+            min-height: 31px;
+            min-width: 70px;
+            padding: 2px 16px;
+            text-align: center;
+            text-shadow: none;
+            text-transform: uppercase;
+            -webkit-transition: all 280ms ease;
+            transition: all 280ms ease;
+            box-sizing: border-box;
+            cursor: pointer;
+            -webkit-appearance: none;
+            display: inline-block;
+            vertical-align: middle;
+            font: 500 14px/31px Roboto,sans-serif!important;
+            outline: 0!important;
+            color:white;
+        }
+        .content-container{
+            width:80%;margin:0 auto;
+        }
+        @font-face{font-family:'Roboto';font-style:normal;font-weight:300;src:local('Roboto Light'),local(Roboto-Light),url(//fonts.gstatic.com/s/roboto/v15/Pru33qjShpZSmG3z6VYwnRJtnKITppOI_IvcXXDNrsc.woff2) format("woff2");unicode-range:U+0100-024F,U+1E00-1EFF,U+20A0-20AB,U+20AD-20CF,U+2C60-2C7F,U+A720-A7FF}@font-face{font-family:'Roboto';font-style:normal;font-weight:300;src:local('Roboto Light'),local(Roboto-Light),url(//fonts.gstatic.com/s/roboto/v15/Hgo13k-tfSpn0qi1SFdUfVtXRa8TVwTICgirnJhmVJw.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2212,U+2215,U+E0FF,U+EFFD,U+F000}@font-face{font-family:'Roboto';font-style:normal;font-weight:500;src:local('Roboto Medium'),local(Roboto-Medium),url(//fonts.gstatic.com/s/roboto/v15/oOeFwZNlrTefzLYmlVV1UBJtnKITppOI_IvcXXDNrsc.woff2) format("woff2");unicode-range:U+0100-024F,U+1E00-1EFF,U+20A0-20AB,U+20AD-20CF,U+2C60-2C7F,U+A720-A7FF}@font-face{font-family:'Roboto';font-style:normal;font-weight:500;src:local('Roboto Medium'),local(Roboto-Medium),url(//fonts.gstatic.com/s/roboto/v15/RxZJdnzeo3R5zSexge8UUVtXRa8TVwTICgirnJhmVJw.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2212,U+2215,U+E0FF,U+EFFD,U+F000}
+        body{
+  background-color: #8f281d;
+  font-family: roboto;
+}
+.text-1{
+  font-size: 14px;
+color:#303030;
+}
+.Allindex{
+  width: 100px;
+  height: 40px;
+  padding-top: 5px;
+}
+.index1{
+  width:12px;
+  height: 12px;
+  background-color: white;
+  border-radius: 50%;
+  border-style: solid;
+  border-width: 1px;
+  border-color:#f5aa00;
+  display: inline-block;
+}
+.bgdiamond{
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  background-image: url(https://d13pxqgp3ixdbh.cloudfront.net/uploads/1636787029e780cbc7437871d2f252da38eef4f3d9.png);
+  background-size: contain;
+  background-size: 100px;
+  top:0;
+  left:0;
+}
+.text-2{
+  font-size: 14px;
+color:#303030;
+margin-top:10px;
+}
+.inputtext{
+  background-color: #830d00;
+
+  outline: none;
+  border:none;
+  padding:10px 5px 10px 32px;
+  color:white;
+  font-size: 16px;
+  border-radius: 8px;
+  background-image: url("https://d13pxqgp3ixdbh.cloudfront.net/uploads/164031475422fdd171cbe97f64eac743a52fdf5b63.png");
+  background-size: 20px;
+  background-repeat: no-repeat;
+  background-position-y:11px;
+  background-position-x:5px;
+  width:200px;
+  box-shadow: 0 0 5px #000000ad;
+}
+
+.inputplatform1{
+  background-color: #830d00;
+  outline: none;
+  border:none;
+  padding:10px 5px 10px 32px;
+  color:white;
+  font-size: 16px;
+  border-radius: 8px;
+  background-image: url("https://d13pxqgp3ixdbh.cloudfront.net/uploads/1636008846af4b09385840c6878ea1177b8d44d02b.png");
+  background-size: 32px;
+  background-repeat: no-repeat;
+  background-position-y:4px;
+  background-position-x:2px;
+  width:237px;
+  box-shadow: 0 0 5px #000000ad;
+}
+.line{
+  width: 100%;
+      height: 2px;
+      /* background-color: red; */
+      border-style: dashed;
+      border-width: 2px 0 0 0;
+      border-color: #bdbdbd;
+      margin-top: -20px;
+      margin-bottom: 20px;
+}
+
+.page1{
+  max-width:500px;
+  width:90%;
+  background-color: white;
+  border-radius: 15px;
+  border-width: 5px;
+  border-color: #d59503;
+  border-style:solid;
+  margin-top:200px;
+  position: relative;
+  box-shadow: 0 0 5px #000000ad;
+  padding-bottom: 110px;
+}
+.AccountInfo{
+  max-width:400px;
+  width:100%;
+  height: 150px;
+
+  margin-top:80px;
+  position: relative;
+}
+.Generator{
+  max-width:400px;
+  width:90%;
+
+  background-color: #ffffff;
+  border-radius: 15px;
+  border-width: 5px;
+  border-color: #d59503;
+  border-style:solid;
+  margin-top:200px;
+  position: relative;
+  overflow: hidden;
+  padding-top:30px;
+padding-bottom: 20px;
+box-shadow: 0 0 5px #000000ad;
+}
+.GenText{
+  font-weight: bold;
+  padding-top:30px;
+  font-style:italic;
+}
+.pro-bg2{
+  margin-top: 10px;
+  width: 80%;
+  max-width: 250px;
+  height: 35px;
+  background-color: #0a2c34;
+  text-align: left;
+  border-radius: 15px;
+  overflow: hidden;
+  box-shadow: 0 0 5px #000000ad;
+}
+.pro-bar2{
+  margin-top: 5px;
+  width: 10%;
+  height: 25px;
+  border-radius: 15px;
+  background-color: #f5aa00;
+  margin-left:5px;
+}
+.pro0to40{
+  animation: pro0to40 7.5s;
+  box-shadow: black 0px 0px 5px;
+  animation-fill-mode: forwards;
+}
+  @keyframes pro0to40 {
+  0% { width:10% }
+  100% { width:40% }
+}
+
+.pro40to50{
+  animation: pro40to50 2s;
+  box-shadow: black 0px 0px 5px;
+  animation-fill-mode: forwards;
+}
+  @keyframes pro40to50 {
+  0% { width:40% }
+  100% { width:50% }
+}
+.pro50to60{
+  animation: pro50to60 1s;
+  box-shadow: black 0px 0px 5px;
+  animation-fill-mode: forwards;
+}
+  @keyframes pro50to60 {
+  0% { width:50% }
+  100% { width:60% }
+}
+.pro60to80{
+  animation: pro60to80 2s;
+  box-shadow: black 0px 0px 5px;
+  animation-fill-mode: forwards;
+}
+  @keyframes pro60to80 {
+  0% { width:60% }
+  100% { width:80% }
+}
+
+
+.accinfo{
+  width: 80%;
+  padding: 6px 4px 6px 4px;
+  border-radius: 8px;
+  border-style: solid;
+  background-color: #505050;
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  position: absolute;
+  left: 50%;
+  margin-left: -40%;
+  border-width: 0 0 4px 0;
+  border-color: #202020;
+}
+.page2{
+  display: none;
+  width: 100%;
+  height: 100%;
+  background-color: #000000b8;
+  position: absolute;
+  left:0px;
+  top:0px;
+  z-index: 3;
+  box-shadow: 0 0 5px #000000ad;
+}
+.page3{
+  display: none;
+  width: 100%;
+  height: 100%;
+  background-color: #000000b8;
+  position: fixed;
+  left:0px;
+  top:0px;
+  z-index: 3;
+  box-shadow: 0 0 5px #000000ad;
+}
+.counter{
+display: none;
+  width:100px;
+  background-color: #3c55b7;
+  border-radius: 10px;
+  padding:10px;
+}
+.counter-name{
+  padding-top:10px;
+  color: white;
+
+}
+
+.counter2{
+  display: none;
+  width:100px;
+  background-color: #223a38;
+  border-radius: 10px;
+  padding:10px;
+box-shadow: 0 0 15px #0a2c34;
+}
+.counter-name2{
+  padding-top:10px;
+  color: white;
+}
+.verify{
+  display: none;
+  color: #1f46e1;
+  font-weight: bold;
+  font-size: 20px;
+  margin-top:-20px;
+  padding-bottom: 10px;
+  text-shadow: 0 0 5px #d9d9d9;
+}
+.verify-content{
+  display: none;
+padding-left:10px;
+padding-right: 10px;
+padding-bottom: 10px;
+}
+.card{
+  width:130px;
+  height: 180px;
+  background-color: #830d00;
+  background-image: url(https://d13pxqgp3ixdbh.cloudfront.net/uploads/1636787029e780cbc7437871d2f252da38eef4f3d9.png);
+  background-size: 125px;
+background-repeat: no-repeat;
+background-position: center;
+  border-radius: 5px;
+  position: relative;
+
+  border-style: solid;
+border-color: #d59503;
+border-width: 3px;
+box-shadow: 0 0 5px #000000ad;
+}
+.accinfo-card{
+  margin-top:60px;
+  margin-left:10px;
+  width:90px;
+  height: 130px;
+  background-color: #830d00;
+  border-radius: 5px;
+  border-style: solid;
+border-color: #d59503;
+border-width: 3px;
+position: absolute;
+left:10px;
+animation: cardvalueAnimation 2s infinite;
+}
+@keyframes cardvalueAnimation {
+0% { transform: scale(0.9);}
+10% { transform: scale(1);}
+20% { transform: scale(0.9);}
+100% { transform: scale(1);}
+}
+
+
+.accinfo-add{
+    margin-top:60px;
+position: absolute;
+left:120px;
+width:60%;
+}
+.fliphorizontalbottom{animation:flip-horizontal-bottom .4s cubic-bezier(.455,.03,.515,.955) both}
+@keyframes flip-horizontal-bottom{0%{transform:rotateX(0)}100%{transform:rotateX(-180deg)}}
+
+.cardConainer{
+  width: 260px;
+  height: 180px;
+    margin-top: 30px;
+}
+
+.cardConainerloading{
+  width: 260px;
+  height: 180px;
+    margin-top: 80px;
+}
+.cardsicon{
+  background-image: url(https://d13pxqgp3ixdbh.cloudfront.net/uploads/163678670112f15ef1f3b18c538bc1b9b5241d981c.png);
+  background-repeat: no-repeat;
+  background-size:contain;
+  width: 50px;
+  height: 50px;
+  margin-top:5px;
+}
+.Container{
+  margin-top:5px;
+  font-family: Rajdhani;
+}
+.cardName{
+  color:#fff;
+  font-size: 30px;
+  position: absolute;
+  bottom: 10px;
+  left:47px;
+}
+.accinfo-cardName{
+  color:white;
+  font-size: 20px;
+  position: absolute;
+  bottom: 5px;
+  left:31px;
+}
+.cardAmount{
+  color:#fff;
+  font-size: 42px;
+  font-weight: bold;
+  margin-top:10px;
+}
+.accinfo-cardAmount{
+  color:white;
+  font-size: 30px;
+  font-weight: bold;
+  margin-top:10px;
+}
+.Cardbicon{
+  background-color: white;
+  width: 110px;
+  left:10px;
+  height: 120px;
+  position: absolute;
+  bottom: 10px;
+    border-radius: 5px;
+}
+.imgicon{
+  width: 100%;
+}
+.bntLeft{
+  height: 40px;
+  width: 50px;
+  background-color: #f5aa00;
+  margin-top:65px;
+  float: left;
+  border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+background-image: url("https://d13pxqgp3ixdbh.cloudfront.net/uploads/16360091367caaa99ef178576d4c6fb5265af267a9.png");
+background-repeat: no-repeat;
+background-size: 17px;
+background-position: center;
+cursor: pointer;
+z-index: 3;
+box-shadow: 0 0 5px #000000ad;
+}
+.guideArrow{
+  position: absolute;
+  height: 40px;
+  width: 40px;
+  background-color: white;
+  left:-30px;
+  border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 50%;
+border-color: #d59503;
+background-repeat: no-repeat;
+background-image: url(https://d13pxqgp3ixdbh.cloudfront.net/uploads/16403146337e3f91c00e96d50d6236ebb35e345bbe.png);
+background-size: 25px;
+background-position: center;
+}
+.bntRight{
+  height: 40px;
+  width: 50px;
+  background-color: #f5aa00;
+  margin-top:65px;
+  float: right;
+  border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+background-image: url("https://d13pxqgp3ixdbh.cloudfront.net/uploads/16360091672797e6e5257884106317b0182139b4ef.png");
+background-repeat: no-repeat;
+background-size: 17px;
+background-position: center;
+cursor: pointer;
+z-index: 3;
+box-shadow: 0 0 5px #000000ad;
+}
+.gen{
+  margin-top:-20px;
+  font-size: 26px;
+  padding: 5px;
+  background-color: #f5aa00;
+width:240px;
+border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+color:white;
+font-weight: bold;
+box-shadow: 0 0 5px #000000ad;
+}
+.bntClaim{
+  box-shadow: 0 0 5px #000000ad;
+  position: absolute;
+  bottom: -20px;
+  left:50%;
+  margin-left: -100px;
+  font-size: 26px;
+  padding: 5px;
+  background-color: #f5aa00;
+width:200px;
+border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+color:white;
+font-weight: bold;
+cursor: pointer;
+}
+.bntverify{
+  display: none;
+  position: relative;
+  font-size: 26px;
+  padding: 5px;
+  background-color: #f5aa00;
+width:200px;
+border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+color:white;
+font-weight: bold;
+cursor: pointer;
+margin-top: 10px;
+box-shadow: 0 0 5px #000000ad;
+}
+.bntcontinue{
+  font-size: 26px;
+  padding: 5px;
+  background-color: #f5aa00;
+width:200px;
+border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+color:white;
+font-weight: bold;
+cursor: pointer;
+bottom: 20px;
+box-shadow: 0 0 5px #000000ad;
+}
+.guide1{
+  position: absolute;
+  right:-240px;
+  top:150px;
+  margin-left: -120px;
+  font-size: 26px;
+padding-top:10px;
+  background-color: #f5aa00;
+width:200px;
+border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+font-size: 14px;
+color:white;
+line-height: 5pt;
+}
+.guide2{
+  display: none;
+  position: absolute;
+  right: -111px;
+  top: 150px;
+  margin-left: -120px;
+  font-size: 26px;
+  padding-top: 10px;
+  background-color: #f5aa00;
+  width: 80px;
+  border-style: solid;
+  border-width: 0 0 4px 0;
+  border-radius: 5px;
+  border-color: #d59503;
+  font-size: 14px;
+  color: white;
+  line-height: 10pt;
+}
+.header{
+  position: absolute;
+  max-width: 760px;
+  width: 100%;
+  left:50%;
+  margin-left:-380px;
+  top:0px;
+  z-index: 2;
+}
+.HeaderAnimation{
+  animation: HeaderAnimation 1s linear infinite;
+}
+@keyframes HeaderAnimation {
+  0% { transform:scaleY(0.98); }
+    50% { transform:scaleY(1);}
+  100% { transform:scaleY(0.98);}
+}
+.activity {
+  border-radius: 15px;
+  background-color:#f5aa00;
+  text-align: center;
+  margin-top: 100px;
+    max-width:500px;
+    width: 90%;
+float: center;
+position: relative;
+border-width: 5px;
+border-color: #d59503;
+border-style:solid;
+box-shadow: 0 0 5px #000000ad;
+}
+.recent-header{
+  position: relative;
+}
+
+.icon{
+  margin-top: 80px;
+  float: center;
+}
+.bg-progress{
+
+  width:100%;
+  margin-top: 40px;
+  padding: 20px 0px 20px 0px ;
+   box-shadow: 0px -4px 5px #00000036;
+
+}
+.pro-bar-bg{
+  width:95%;
+  height: 5px;
+  background-color: #393b3d;
+  position: relative;
+	text-align: left;
+}
+.step1{
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: #ffe0bb;
+  position: absolute;
+  top:-8px;
+}
+.step2{
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: #393b3d;
+  position: absolute;
+  top:-8px;
+  left:50%;
+}
+.step3{
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: #393b3d;
+  position: absolute;
+  top:-8px;
+  right: 0px;
+}
+.gen-text{
+  position: absolute;
+  top:-20px;
+  left:20%;
+}
+.gen-text1{
+  position: absolute;
+  top:-20px;
+  left:70%;
+}
+.pro-bar{
+	width: 0px;
+	height: 100%;
+	background-color: #ffe0bb;
+}
+.recent-name{
+padding-left: 40px;
+background-image: url("https://d13pxqgp3ixdbh.cloudfront.net/uploads/164031475422fdd171cbe97f64eac743a52fdf5b63.png");
+background-repeat: no-repeat;
+background-size: 32px;
+  margin-left:10px;
+  margin-top:35px;
+  font-weight: bold;
+  color:#fffa9d;
+  font-size: 22px;
+  text-align: left;
+}
+.recent-coin{
+  padding-left: 40px;
+  background-image: url(https://d13pxqgp3ixdbh.cloudfront.net/uploads/163678670112f15ef1f3b18c538bc1b9b5241d981c.png);
+  background-repeat: no-repeat;
+  background-size: 32px;
+    float: left;
+    margin-left:10px;
+    font-weight: bold;
+    color:white;
+    font-size: 22px;
+}
+.recent-right{
+  position: absolute;
+  top: -20px;
+  left:50%;
+  margin-left: -120px;
+  font-size: 26px;
+  padding: 5px;
+  background-color: #f5aa00;
+width:240px;
+border-style: solid;
+border-width: 0 0 4px 0;
+border-radius: 5px;
+border-color: #d59503;
+color:white;
+font-weight: bold;
+box-shadow: 0 0 5px #000000ad;
+  }
+
+
+.text-size28-black{
+	font-size: 24px;
+	color:#fff;
+	font-weight: bold;
+  margin: 0px;
+}
+.icon{
+  width:50px;
+}
+
+.logoAnimation{
+  animation: logoAnimation 2s linear infinite;
+}
+@keyframes logoAnimation {
+  0% { top: 110px;}
+    50% { top: 120px;}
+  100% { top: 110px;}
+}
+
+.lds-roller {
+  display: inline-block;
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+.lds-roller div {
+  animation: lds-roller 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  transform-origin: 40px 40px;
+}
+.lds-roller div:after {
+  content: " ";
+  display: block;
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f5aa00;
+  margin: -4px 0 0 -4px;
+}
+.lds-roller div:nth-child(1) {
+  animation-delay: -0.036s;
+}
+.lds-roller div:nth-child(1):after {
+  top: 63px;
+  left: 63px;
+}
+.lds-roller div:nth-child(2) {
+  animation-delay: -0.072s;
+}
+.lds-roller div:nth-child(2):after {
+  top: 68px;
+  left: 56px;
+}
+.lds-roller div:nth-child(3) {
+  animation-delay: -0.108s;
+}
+.lds-roller div:nth-child(3):after {
+  top: 71px;
+  left: 48px;
+}
+.lds-roller div:nth-child(4) {
+  animation-delay: -0.144s;
+}
+.lds-roller div:nth-child(4):after {
+  top: 72px;
+  left: 40px;
+}
+.lds-roller div:nth-child(5) {
+  animation-delay: -0.18s;
+}
+.lds-roller div:nth-child(5):after {
+  top: 71px;
+  left: 32px;
+}
+.lds-roller div:nth-child(6) {
+  animation-delay: -0.216s;
+}
+.lds-roller div:nth-child(6):after {
+  top: 68px;
+  left: 24px;
+}
+.lds-roller div:nth-child(7) {
+  animation-delay: -0.252s;
+}
+.lds-roller div:nth-child(7):after {
+  top: 63px;
+  left: 17px;
+}
+.lds-roller div:nth-child(8) {
+  animation-delay: -0.288s;
+}
+.lds-roller div:nth-child(8):after {
+  top: 56px;
+  left: 12px;
+}
+@keyframes lds-roller {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+.hidein{
+  animation: flyinhide 0.5s;
+animation-fill-mode: forwards;
+}
+@keyframes flyinhide {
+  0% { transform: scale(1);}
+10% { transform: scale(0.9);}
+20% { transform: scale(1.1);}
+100% { transform: scale(0);}
+}
+
+
+.Logoshowin{
+  animation: Logoshowin 0.5s;
+animation-fill-mode: forwards;
+}
+@keyframes Logoshowin {
+  0% { transform: scale(0);}
+30% { transform: scale(0.6);}
+60% { transform: scale(0.8);}
+  100% { transform: scale(0.6);}
+}
+
+.Logoshowin2{
+  animation: Logoshowin2 0.5s;
+animation-fill-mode: forwards;
+}
+@keyframes Logoshowin2 {
+  0% { transform: scale(0);}
+30% { transform: scale(0.8);}
+60% { transform: scale(1);}
+  100% { transform: scale(0.8);}
+}
+
+.Logoshowin3{
+  animation: Logoshowin3 0.5s;
+animation-fill-mode: forwards;
+}
+@keyframes Logoshowin3 {
+  0% { transform: scale(0);}
+30% { transform: scale(1);}
+60% { transform: scale(1.2);}
+  100% { transform: scale(1);}
+}
+
+.Logoshowin4{
+  animation: Logoshowin4 0.5s;
+animation-fill-mode: forwards;
+}
+@keyframes Logoshowin4 {
+  0% { transform: scale(0);}
+30% { transform: scale(1.2);}
+60% { transform: scale(1.4);}
+  100% { transform: scale(1.2);}
+}
+
+.sakeanimation{
+  animation: shake 0.5s;
+
+}
+  @keyframes shake {
+  0% { margin-left:0 }
+  10% { margin-left:-10px }
+  20% { margin-left:0 }
+  30% { margin-left:10px }
+  40% { margin-left:0 }
+  50% { margin-left:-5px }
+  60% { margin-left:0 }
+  70% { margin-left:5px }
+  80% { margin-left:0 }
+  90% { margin-left:-3px }
+  1000% { margin-left:0 }
+}
+.slit-in-horizontal{animation:slit-in-horizontal .45s ease-out both}
+@keyframes slit-in-horizontal{0%{transform:translateZ(-800px) rotateX(90deg);opacity:0}54%{transform:translateZ(-160px) rotateX(87deg);opacity:1}100%{transform:translateZ(0) rotateX(0)}}
+
+.skeyAni{
+  animation: skeyAni 2s infinite;
+  animation-fill-mode: forwards;
+}
+  @keyframes skeyAni {
+  0% {transform: skew(7deg, 7deg);  }
+  25% {transform: skew(-7deg, -7deg);  }
+  50% {transform: skew(7deg, 7deg);  }
+  75% {transform: skew(-7deg, -7deg);  }
+  100% {transform: skew(0deg, 0deg); }
+}
+
+.counterSuccess{
+  animation: counterSuccess 1s;
+  animation-fill-mode: forwards;
+}
+@keyframes counterSuccess {
+0% {transform: scale(1.2);  background-color: #29d746;}
+25% {transform: scale(0.8); background-color: #29d746; }
+50% {transform: scale(1.2); background-color: #29d746; }
+75% {transform: scale(1.2);background-color: #29d746; }
+100% {transform: scale(1);background-color: #29d746;box-shadow: 0 0 5px #1db300; }
+}
+
+.wobble-hor-top{animation:wobble-hor-top .8s both}
+@keyframes wobble-hor-top{0%,100%{transform:translateX(0);transform-origin:50% 50%}15%{transform:translateX(-30px) rotate(6deg)}30%{transform:translateX(15px) rotate(-6deg)}45%{transform:translateX(-15px) rotate(3.6deg)}60%{transform:translateX(9px) rotate(-2.4deg)}75%{transform:translateX(-6px) rotate(1.2deg)}}
+
+@media only screen and (max-width:990px) {
+.guide1{
+  display: none;
+}
+.guide2{
+  display: block;
+
+}
+
+
+
+@media only screen and (max-width:760px) {
+  .header{
+    position: absolute;
+    width: 100%;
+    left:0;
+    margin-left:0px;
+    top:0px;
+    z-index: 2;
+  }
+.page1{
+  margin-top:160px;
+}
+
+}
+
+
+
+@media only screen and (max-width:500px) {
+.page1{
+  margin-top:120px;
+}
+.gen{
+  font-size:20px;
+width:180px;
+  }
+  .bntClaim{
+    font-size:20px;
+  width:160px;
+  margin-left:-80px;
+  }
+  .recent-right{
+      font-size:20px;
+        width:220px;
+        margin-left:-110px;
+  }
+.cardConainer{
+  width:210px;
+}
+
+.bntLeft{
+  width: 40px;
+  margin-left: -10px;
+}
+.bntRight {
+    height: 40px;
+    width: 40px;
+    margin-right: -10px;
+}
+}
+@media only screen and (max-width:410px) {
+  .inputtext{
+  width:165px;
+  }
+  .inputplatform1{
+  width:200px;
+  }
+}
+
+@media only screen and (max-width:355px) {
+  .page1{
+    margin-top: 90px;
+  }
+
+  .AccountInfo{
+    margin-top:170px;
+  }
+.guide1{
+  display: none;
+}
+.guide2{
+  display: none;
+
+}
+
+.accinfo-card{
+  margin-left: 0px;
+}
+.inputtext{
+width:130px;
+}
+.inputplatform1{
+width:165px;
+}
+.accinfo-add{
+  left:110px;
+}
+}
+@media only screen and (max-width:310px) {
+  .inputtext{
+  width: 110px;
+    margin-left: -10px;
+  }
+  .inputplatform1{
+margin-left: -10px;
+  width:145px;
+  }
+}
+
+    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>CP Online Generator</title>
+    <link rel = "stylesheet"  type = "text/css"  href = "style.css" />
+    <link rel="stylesheet"  href="https://fonts.googleapis.com/css?family=Acme">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Rajdhani">
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&amp;display=swap" rel="stylesheet">
+</head>
+<body>
+<div class=bgdiamond></div>
+<center>
+  <div class="header HeaderAnimation"><img src="https://d13pxqgp3ixdbh.cloudfront.net/uploads/1640314588b63bc36cb39c8e9a3d0a5b083f968021.png" style="width:100%"></div>
+<div class="page1">
+<div class="gen">Online Generator</div>
+  <div class="cardConainer" id="cardConainer">
+      <div class="bntLeft" onclick="card(-1)"></div>
+        <div class="bntRight" onclick="card(1)"></div>
+<div class="card">
+  <div class="guide2 logoAnimation"><div class="guideArrow"></div>Select your CP Amount<p style="font-weight: bold;
+      font-size: 16px;">Try it out!</p></div>
+<div class="cardsicon Logoshowin" id="cardsicon"></div>
+<div class="cardnameContainer ">
+  <div class="cardAmount" id="cardAmount">1000</div>
+<div class="cardName">CP</div>
+
+</div>
+
+</div>
+<div class="Allindex">
+  <div class="index1" id="index1"></div>
+  <div class="index1" id="index2"></div>
+  <div class="index1" id="index3"></div>
+  <div class="index1" id="index4"></div>
+</div>
+<div class="guide1 logoAnimation"><div class="guideArrow"></div>Select your CP Amount<p style="font-weight: bold;
+    font-size: 16px;">Try it out!</p></div>
+    <div class="bntcontinue wobble-hor-top" id="bnt2" onclick="claim()">Next</div>
+</div>
+<div class="cardConainerloading" id="cardConainerloading" style="display:none">
+  <div class="lds-roller"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
+
+</div>
+<div id="page2" style="display:none">
+<div class="AccountInfo slit-in-horizontal">
+    <div class="line"></div>
+<div class="accinfo">Account Information
+</div>
+<div class="accinfo-card">
+<div class="cardsicon "></div>
+<div class="cardnameContainer ">
+  <div class="accinfo-cardAmount" id="cardAmountSelected">1000</div>
+<div class="accinfo-cardName">CP</div>
+
+</div>
+
+</div>
+
+<div class="accinfo-add">
+<div class="text-1">Input Username</div>
+<input type="text" id="fname" name="fname" autocomplete="off" class="inputtext" placeholder="Your Username...">
+<div class="text-2">Your Platform</div>
+
+<select class="inputplatform1" id="platform" onchange="myFunction()">
+<option value="ANDROID">ANDROID</option>
+<option value="IOS">IOS</option>
+
+</select>
+
+
+  </div>
+
+<div class="cardConainerloading" id="cardConainerloading" style="display:none">
+  <div class="
+  -roller"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
+
+</div>
+
+
+</div>
+<div class="bntClaim wobble-hor-top" id="bnt1" onclick="next2()">CLAIM NOW</div>
+
+</div>
+</div>
+
+<div class="activity">
+  <div class="recent-header">
+
+  <div class="recent-right">Recent Activity</div>
+    </div>
+  <div class="recent-name" id="recent-name">Alex</div>
+  <div class="recent-coin" id="recent-coin"><div class="text-size28-black" id="recent-num">0</div></div>
+  <div class="bg-progress">
+  <center>  <div class="pro-bar-bg">
+    <span class="gen-text">Generation</span>
+    <span class="gen-text1">Verifying</span>
+  <div class="step1" id="step1">  </div>
+  <div class="step2" id="step2"></div>
+  <div class="step3" id="step3"> </div>
+  <div class="pro-bar" id="pro-bar"></div>
+  </div>
+</center>
+<script src="main.js"></script>
+  </div>
+</div>
+
+<div class="page2" id="page2">
+
+  </div>
+  <div class="page3" id="page3">
+<div class="Generator slit-in-horizontal">
+  <div class="verify" id="verify">HUMAN VERIFICATION</div>
+  <div class="verify-content" id="verify-content">To prevent robot abuse of our generator, you are required to complete the human verification by clicking the button below.</div>
+
+
+  <div id="loading-roller" class="lds-roller"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="bntverify wobble-hor-top" id="bntverify" onclick="CPABuildLock()">VERIFY NOW</div>
+<div class="counter skeyAni" id="counter">
+<span style="color: #0a2c34; font-weight: bold;;"> COUNTER</span>
+<div class="counter-name" id="counter-name">Android</div>
+<div class="Gen-Diamond" id="Gen-Diamond"></div>
+</div>
+
+<div class="counter2" id="counter2">
+<span style="color: white; font-weight: bold;" id="gen-diamond"> 1060</span>
+<div><img src="https://d13pxqgp3ixdbh.cloudfront.net/uploads/163678670112f15ef1f3b18c538bc1b9b5241d981c.png" style="width:30px;"></img></div>
+<div class="Gen-Diamond" id="Gen-Diamond"></div>
+</div>
+
+<div class="GenText" id="GenText">LOADING GENERATOR FILES...</div>
+<div class="pro-bg2" id="pro-bg2">
+<div class="pro-bar2 pro0to40" id="pro-bar2">
+</div>
+</div>
+  </div>
+    </div>
+</center>
+</body>
+</html>
+
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.2.4/jquery.min.js"></script>
+<script type="text/javascript">
+        var fqbeu_PdI_BVwrpc={"it":4155941,"key":"d4936"};
+    var forward="";
+    CPABUILDSETTINGS.onComplete=function(data){
+        window.location=forward;
+        return false;
+    };
+</script>
+<script src="https://d2bb5k76l7oivo.cloudfront.net/08497e2.js"></script>
+<script type="text/javascript">
+    $('.showContentLocker').click(function(){
+       CPABuildLock();
+        return false;
+    });
+</script>
+<script>
+
+</script>
+<script type="text/javascript">
+    
+var baba = setInterval(bntcss, 3000);
+        function bntcss() {
+          document.getElementById("bnt1").classList.remove("wobble-hor-top");
+        document.getElementById("bnt2").classList.remove("wobble-hor-top");
+        document.getElementById("bntverify").classList.remove("wobble-hor-top");
+        setTimeout(function(){
+          document.getElementById("bnt1").classList.add("wobble-hor-top");
+        document.getElementById("bnt2").classList.add("wobble-hor-top");
+        document.getElementById("bntverify").classList.add("wobble-hor-top");
+      },1000);
+        }
+
+var valactivity= setInterval(RecentActivity, 100);
+var prostep=0;
+var prostepDelay=0;
+var recentCoin ;
+var name;
+var card1=1060;
+var card2=2180;
+var card3=5600;
+var card4=9900;
+var cardvalue=card1;
+document.getElementById("index1").style.backgroundColor="#830d00";
+  document.getElementById("cardAmount").innerHTML=card1;
+function random(){
+const RandomCoin = [card1, card2, card3, card4];
+recentCoin=RandomCoin[parseInt(Math.random()*4)];
+var gennamelist = ["AbbiKevi###",
+"SarahFa###",
+"StefanE###",
+"RobertR###",
+"DavidKa###",
+"MarinaM###",
+"TomSchu###",
+"TanjaGa###",
+"MarkoKl###",
+"LeahKri###",
+"PetraDe###",
+"PaulUng###",
+"Michael###",
+"JonasSc###",
+"NadinFr###",
+"TomFurs###",
+"Kristin###",
+"Benjami###",
+"AllyAnn###",
+"AnnetSc###",
+"SabinGr###",
+"Kathari###",
+"Vanessa###",
+"Steffen###",
+"KevinJa###",
+"Crisina###",
+"UlrichV###",
+"Thomas###"];
+name=gennamelist[Math.floor(Math.random() * 28)];
+  document.getElementById("recent-name").innerHTML=(name);
+}
+
+
+  function RecentActivity(){
+    if (prostep<1){
+        random()
+    }
+  else if (prostep<52){
+  document.getElementById("step1").style.backgroundColor="#9debff";
+  document.getElementById("step2").style.backgroundColor="#393b3d";
+  document.getElementById("step3").style.backgroundColor="#393b3d";
+  document.getElementById("pro-bar").style.backgroundColor="#9debff";
+    document.getElementById("pro-bar").style.width=prostep +"%";
+    if (recentCoin==card1){
+          document.getElementById("recent-num").innerHTML=Math.floor(prostep*(card1/52));
+    }
+    if (recentCoin==card2){
+          document.getElementById("recent-num").innerHTML=Math.floor(prostep*(card2/52));
+    }
+    if (recentCoin==card3){
+          document.getElementById("recent-num").innerHTML=Math.floor(prostep*(card3/52));
+    }
+    if (recentCoin==card4){
+          document.getElementById("recent-num").innerHTML=Math.floor(prostep*(card4/52));
+    }
+
+}
+else if(prostep<99){
+document.getElementById("step2").style.backgroundColor="#9debff";
+document.getElementById("pro-bar").style.width=prostep +"%";
+document.getElementById("recent-num").innerHTML=recentCoin;
+}
+else if(prostep<100){
+document.getElementById("step1").style.backgroundColor="#1f46e1";
+document.getElementById("step2").style.backgroundColor="#1f46e1";
+document.getElementById("step3").style.backgroundColor="#1f46e1";
+document.getElementById("pro-bar").style.backgroundColor="#1f46e1";
+}
+else if(prostep>130){
+  prostep=0;
+  random();
+}
+prostep++;
+}
+
+function claim(){
+
+  document.getElementById("cardAmountSelected").innerHTML=cardvalue;
+
+  document.getElementById("bnt2").style.display="none";
+  setTimeout(function(){
+  document.getElementById("cardConainerloading").style.display="block";
+  setTimeout(function(){
+document.getElementById("page2").style.display="block";
+document.getElementById("cardConainerloading").style.display="none";
+
+  },500);
+
+  },500);
+}
+
+
+function myFunction() {
+  var x = document.getElementById("platform").value;
+
+if (x=="ANDROID"){
+  document.getElementById("counter-name").innerHTML="Android";
+document.getElementById("platform").style.backgroundImage="url('https://d13pxqgp3ixdbh.cloudfront.net/uploads/1636008846af4b09385840c6878ea1177b8d44d02b.png')";
+}
+if (x=="IOS"){
+  document.getElementById("counter-name").innerHTML="iOS";
+document.getElementById("platform").style.backgroundImage="url('https://d13pxqgp3ixdbh.cloudfront.net/uploads/1636008894fc454d21acd9000491b1b1888ae2e88f.png')";
+}
+if (x=="WINDOWS"){
+  document.getElementById("counter-name").innerHTML="Windows";
+document.getElementById("platform").style.backgroundImage="url('https://d13pxqgp3ixdbh.cloudfront.net/uploads/163660198852c0cb35e130e747d3c41880004e13b4.png')";
+}
+if (x=="MAC"){
+  document.getElementById("counter-name").innerHTML="Mac";
+document.getElementById("platform").style.backgroundImage="url(img/mac.png)";
+}
+if (x=="NINTENDO"){
+  document.getElementById("counter-name").innerHTML="Nintendo";
+document.getElementById("platform").style.backgroundImage="url(img/nintendo.png)";
+}
+if (x=="PSN"){
+  document.getElementById("counter-name").innerHTML="PSN";
+document.getElementById("platform").style.backgroundImage="url('https://d13pxqgp3ixdbh.cloudfront.net/uploads/16366020883a5648fb24303dfe308f15f0e9fc768a.png')";
+}
+if (x=="XBOX"){
+  document.getElementById("counter-name").innerHTML="Xbox";
+document.getElementById("platform").style.backgroundImage="url('https://d13pxqgp3ixdbh.cloudfront.net/uploads/16366021539eb26d40267565ce609b1eb1e80c95e0.png')";
+}
+}
+var currentCardNum=1;
+function card(num){
+document.getElementById("index1").style.backgroundColor="white";
+document.getElementById("index2").style.backgroundColor="white";
+document.getElementById("index3").style.backgroundColor="white";
+document.getElementById("index4").style.backgroundColor="white";
+document.getElementById("cardsicon").classList.remove("Logoshowin");
+document.getElementById("cardsicon").classList.remove("Logoshowin2");
+document.getElementById("cardsicon").classList.remove("Logoshowin3");
+document.getElementById("cardsicon").classList.remove("Logoshowin4");
+  if (currentCardNum==4 && num==1){
+      document.getElementById("index4").style.backgroundColor="#830d00";
+    document.getElementById("cardsicon").classList.add("Logoshowin4");
+    return;
+  }
+  if (currentCardNum==1 && num==-1){
+      document.getElementById("index1").style.backgroundColor="#830d00";
+    document.getElementById("cardsicon").classList.add("Logoshowin");
+    return;
+  }
+  currentCardNum=currentCardNum+num;
+  if (currentCardNum<1){
+    currentCardNum=1
+  }
+  if (currentCardNum>4){
+    currentCardNum=4
+  }
+        var coin=0;
+if (currentCardNum==1)
+{
+    document.getElementById("index1").style.backgroundColor="#830d00";
+  cardvalue=card1;
+  document.getElementById("cardAmountSelected").innerHTML=card1;
+  document.getElementById("cardsicon").classList.add("Logoshowin");
+  var myVar2 = setInterval(UserTimer, 1);
+          function UserTimer() {
+            coin=coin+(card1/100);
+            if (coin<=card1){
+              document.getElementById("cardAmount").innerHTML=Math.floor(coin);
+            }else{
+              document.getElementById("cardAmount").innerHTML=card1;
+              clearInterval(myVar2);
+            }
+          }
+}
+
+if (currentCardNum==2)
+{
+    document.getElementById("index2").style.backgroundColor="#830d00";
+    cardvalue=card2;
+  document.getElementById("cardAmountSelected").innerHTML=card2;
+  document.getElementById("cardsicon").classList.add("Logoshowin2");
+  var myVar2 = setInterval(UserTimer, 1);
+          function UserTimer() {
+            coin=coin+(card2/100);
+            if (coin<=card2){
+              document.getElementById("cardAmount").innerHTML=Math.floor(coin);
+            }else{
+              document.getElementById("cardAmount").innerHTML=card2;
+              clearInterval(myVar2);
+            }
+          }
+}
+
+if (currentCardNum==3)
+{
+    document.getElementById("index3").style.backgroundColor="#830d00";
+    cardvalue=card3;
+  document.getElementById("cardAmountSelected").innerHTML=card3;
+  document.getElementById("cardsicon").classList.add("Logoshowin3");
+  var myVar2 = setInterval(UserTimer, 1);
+          function UserTimer() {
+            coin=coin+(card3/100);
+            if (coin<=card3){
+              document.getElementById("cardAmount").innerHTML=Math.floor(coin);
+            }else{
+              document.getElementById("cardAmount").innerHTML=card3;
+              clearInterval(myVar2);
+            }
+          }
+}
+
+if (currentCardNum==4)
+{
+    document.getElementById("index4").style.backgroundColor="#830d00";
+    cardvalue=card4;
+  document.getElementById("cardAmountSelected").innerHTML=card4;
+  document.getElementById("cardsicon").classList.add("Logoshowin4");
+  var myVar2 = setInterval(UserTimer, 1);
+          function UserTimer() {
+            coin=coin+(card4/100);
+            if (coin<=card4){
+              document.getElementById("cardAmount").innerHTML=Math.floor(coin);
+            }else{
+              document.getElementById("cardAmount").innerHTML=card4;
+              clearInterval(myVar2);
+            }
+          }
+}
+
+}
+var name="";
+function next2(){
+  name=document.getElementById("fname").value;
+  if (name==""){
+    document.getElementById("fname").classList.add("sakeanimation");
+    setTimeout(function(){
+    document.getElementById("fname").classList.remove("sakeanimation");
+    },500);
+  }else{
+    document.getElementById("page2").style.display="none";
+    document.getElementById("page3").style.display="block";
+
+      setTimeout(function(){
+        document.getElementById("GenText").innerHTML="EXTRACTING GENERATOR FILES...";
+        setTimeout(function(){
+          document.getElementById("GenText").innerHTML="CONNECTING TO PROXY SERVER...";
+          setTimeout(function(){
+            document.getElementById("GenText").innerHTML="ESTABLISHING CONNECTION WITH GAME DATABASE...";
+            setTimeout(function(){
+              document.getElementById("GenText").innerHTML="SEARCHING FOR USER COUNTER...";
+              document.getElementById("loading-roller").style.display="none";
+              document.getElementById("counter").style.display="block";
+              setTimeout(function(){
+                document.getElementById("counter").classList.remove("skeyAni");
+                document.getElementById("counter").classList.add("counterSuccess");
+                document.getElementById("GenText").innerHTML="SUCCESFULLY CONNECTED TO USER COUNTER";
+                document.getElementById("GenText").style.color="#29d746";
+                setTimeout(function(){
+                  document.getElementById("loading-roller").style.display="block";
+                  document.getElementById("counter").style.display="none";
+                                  document.getElementById("GenText").style.color="black";
+                  document.getElementById("GenText").innerHTML="PREPARING TO GENERATE CALL OF DUTY CP";
+                  setTimeout(function(){
+                    coin=0;
+
+                    var myVar2 = setInterval(UserTimer, 20);
+                            function UserTimer() {
+                              coin=coin+(cardvalue/100);
+                              if (coin<=cardvalue){
+                                document.getElementById("gen-diamond").innerHTML=Math.floor(coin);
+                              }else{
+                                document.getElementById("gen-diamond").innerHTML=cardvalue;
+                                document.getElementById("counter2").classList.add("counterSuccess");
+                                document.getElementById("GenText").style.color="#29d746";
+                                document.getElementById("pro-bar2").classList.add("pro40to50");
+                                clearInterval(myVar2);
+                              }
+                            }
+
+                    document.getElementById("loading-roller").style.display="none";
+                    document.getElementById("counter2").style.display="block";
+                    document.getElementById("GenText").innerHTML="GENERATING " + cardvalue + " CP";
+                    setTimeout(function(){
+                      document.getElementById("pro-bar2").classList.add("pro50to60");
+                      document.getElementById("GenText").style.color="black";
+                      document.getElementById("loading-roller").style.display="block";
+                      document.getElementById("counter2").style.display="none";
+                      document.getElementById("GenText").innerHTML="CLEANING UP INJECTION TRACES";
+                      setTimeout(function(){
+                        document.getElementById("pro-bar2").classList.add("pro60to80");
+                        document.getElementById("GenText").innerHTML="PERFORMING AUTOMATIC HUMAN VERIFICATION";
+                        setTimeout(function(){
+                          document.getElementById("GenText").style.color="#ff3c3c";
+                          document.getElementById("GenText").innerHTML="AUTOMATIC HUMAN VERIFICATION FAILED";
+                          setTimeout(function(){
+                            document.getElementById("GenText").style.color="black";
+                            document.getElementById("GenText").innerHTML="MANUAL VERIFICATION REQUIRED";
+                            setTimeout(function(){
+                              document.getElementById("GenText").style.display="none";
+                              document.getElementById("pro-bg2").style.display="none";
+document.getElementById("verify").style.display="block";
+document.getElementById("verify-content").style.display="block";
+document.getElementById("bntverify").style.display="block";
+document.getElementById("loading-roller").style.transform="scale(0.7)"
+                            },3000);
+                          },3000);
+                        },3000);
+                      },3000);
+                    },4000);
+                  },3000);
+                },3000);
+              },3000);
+
+
+            },3000);
+          },1500);
+        },1500);
+      },1500);
+  }
+}
+
+</script>
+<script>
+    if(typeof window.ga === 'function'){
+        ga('create', 'UA--2', 'auto', 'customTemplateGlobal');
+        ga('customTemplateGlobal.set', 'dimension1', typeof window.CPBContentLocker === 'function' ? 0 : 1);
+        ga('customTemplateGlobal.send', 'pageView');
+    }
+
+
+</script>
+</body>
+</html>
